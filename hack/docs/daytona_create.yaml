@@ -1,6 +1,6 @@
 name: daytona create
 synopsis: Create a workspace
-usage: daytona create [REPOSITORY_URL] [flags]
+usage: daytona create [REPOSITORY_URL | PROJECT_CONFIG_NAME]... [flags]
 options:
     - name: blank
       default_value: "false"

@@ -3,7 +3,7 @@
 Create a workspace
 
 ```
-daytona create [REPOSITORY_URL] [flags]
+daytona create [REPOSITORY_URL | PROJECT_CONFIG_NAME]... [flags]
 ```
 
 ### Options

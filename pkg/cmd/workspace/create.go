@@ -35,16 +35,15 @@ import (
 )
 
 var CreateCmd = &cobra.Command{
-	Use:     "create [REPOSITORY_URL]",
+	Use:     "create [REPOSITORY_URL | PROJECT_CONFIG_NAME]...",
 	Short:   "Create a workspace",
-	Args:    cobra.RangeArgs(0, 1),
 	GroupID: util.WORKSPACE_GROUP,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 		var projects []apiclient.CreateProjectConfigDTO
 		var workspaceName string
 		var existingWorkspaceNames []string
-		var existingProjectConfigName *string
+		var existingProjectConfigNames []string
 
 		apiClient, err := apiclient_util.GetApiClient(nil)
 		if err != nil {
@@ -88,7 +87,7 @@ var CreateCmd = &cobra.Command{
 				}
 			}
 		} else {
-			existingProjectConfigName, err = processCmdArgument(args[0], apiClient, &projects, ctx)
+			existingProjectConfigNames, err = processCmdArguments(args, apiClient, &projects, ctx)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -117,11 +116,14 @@ var CreateCmd = &cobra.Command{
 			Msg: "Request submitted\n",
 		}, logs_view.WORKSPACE_INDEX)
 
-		if existingProjectConfigName != nil {
+		for i, projectConfigName := range existingProjectConfigNames {
+			if projectConfigName == "" {
+				continue
+			}
 			logs_view.DisplayLogEntry(logs.LogEntry{
-				ProjectName: *existingProjectConfigName,
-				Msg:         fmt.Sprintf("Using detected project config '%s'\n", *existingProjectConfigName),
-			}, logs_view.FIRST_PROJECT_INDEX)
+				ProjectName: projects[i].Name,
+				Msg:         fmt.Sprintf("Using detected project config '%s'\n", projectConfigName),
+			}, i)
 		}
 
 		target, err := getTarget(activeProfile.Name)
@@ -340,26 +342,60 @@ func processPrompting(apiClient *apiclient.APIClient, workspaceName *string, pro
 	return nil
 }
 
-func processCmdArgument(argument string, apiClient *apiclient.APIClient, projects *[]apiclient.CreateProjectConfigDTO, ctx context.Context) (*string, error) {
+func processCmdArguments(repoUrls []string, apiClient *apiclient.APIClient, projects *[]apiclient.CreateProjectConfigDTO, ctx context.Context) ([]string, error) {
+	if len(repoUrls) == 0 {
+		return nil, fmt.Errorf("no repository URLs provided")
+	}
+
+	if len(repoUrls) > 1 && (builderFlag != "" || customImageFlag != "" || customImageUserFlag != "" || devcontainerPathFlag != "") {
+		return nil, fmt.Errorf("can't set custom project configuration properties for multiple projects")
+	}
+
 	if builderFlag != "" && builderFlag != create.DEVCONTAINER && devcontainerPathFlag != "" {
 		return nil, fmt.Errorf("can't set devcontainer file path if builder is not set to %s", create.DEVCONTAINER)
 	}
 
 	var projectConfig *apiclient.ProjectConfig
 
-	repoUrl, err := util.GetValidatedUrl(argument)
-	if err == nil {
-		// The argument is a Git URL
-		return processGitURL(repoUrl, apiClient, projects, ctx)
+	existingProjectConfigNames := []string{}
+
+	for _, repoUrl := range repoUrls {
+		validatedUrl, err := util.GetValidatedUrl(repoUrl)
+		if err == nil {
+			// The argument is a Git URL
+			existingProjectConfigName, err := processGitURL(validatedUrl, apiClient, projects, ctx)
+			if err != nil {
+				return nil, err
+			}
+			if existingProjectConfigName != nil {
+				existingProjectConfigNames = append(existingProjectConfigNames, *existingProjectConfigName)
+			} else {
+				existingProjectConfigNames = append(existingProjectConfigNames, "")
+			}
+
+			continue
+		}
+
+		// The argument is not a Git URL - try getting the project config
+		projectConfig, _, err = apiClient.ProjectConfigAPI.GetProjectConfig(ctx, repoUrl).Execute()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse the URL or fetch the project config for '%s'", repoUrl)
+		}
+
+		existingProjectConfigName, err := workspace_util.AddProjectFromConfig(projectConfig, apiClient, projects, branchFlag)
+		if err != nil {
+			return nil, err
+		}
+		if existingProjectConfigName != nil {
+			existingProjectConfigNames = append(existingProjectConfigNames, *existingProjectConfigName)
+		} else {
+			existingProjectConfigNames = append(existingProjectConfigNames, "")
+		}
 	}
 
-	// The argument is not a Git URL - try getting the project config
-	projectConfig, _, err = apiClient.ProjectConfigAPI.GetProjectConfig(ctx, argument).Execute()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse the URL or fetch the project config for '%s'", argument)
-	}
+	dedupProjectNames(projects)
 
-	return workspace_util.AddProjectFromConfig(projectConfig, apiClient, projects, branchFlag)
+	return existingProjectConfigNames, nil
 }
 
 func processGitURL(repoUrl string, apiClient *apiclient.APIClient, projects *[]apiclient.CreateProjectConfigDTO, ctx context.Context) (*string, error) {
@@ -433,4 +469,17 @@ func waitForDial(tsConn *tsnet.Server, workspaceId string, projectName string) e
 		time.Sleep(time.Second)
 	}
 	return nil
+}
+
+func dedupProjectNames(projects *[]apiclient.CreateProjectConfigDTO) {
+	projectNames := map[string]int{}
+
+	for i, project := range *projects {
+		if _, ok := projectNames[project.Name]; ok {
+			(*projects)[i].Name = fmt.Sprintf("%s-%d", project.Name, projectNames[project.Name])
+			projectNames[project.Name]++
+		} else {
+			projectNames[project.Name] = 2
+		}
+	}
 }
