@@ -14,6 +14,7 @@ import (
 	"github.com/daytonaio/daytona/internal/util"
 	"github.com/daytonaio/daytona/pkg/apiclient"
 	"github.com/daytonaio/daytona/pkg/views"
+	list_view "github.com/daytonaio/daytona/pkg/views/workspace/list"
 )
 
 func generateWorkspaceList(workspaces []apiclient.WorkspaceDTO) []list.Item {
@@ -98,6 +99,7 @@ func getWorkspaceProgramEssentials(modelTitle string, actionVerb string, workspa
 }
 
 func selectWorkspacePrompt(workspaces []apiclient.WorkspaceDTO, actionVerb string, choiceChan chan<- *apiclient.WorkspaceDTO) {
+	list_view.SortWorkspaces(&workspaces, true)
 
 	p := getWorkspaceProgramEssentials("Select a Workspace To ", actionVerb, workspaces, "")
 	if m, ok := p.(model[apiclient.WorkspaceDTO]); ok && m.choice != nil {
